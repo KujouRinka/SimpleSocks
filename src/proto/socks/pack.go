@@ -9,10 +9,27 @@ import (
 )
 
 type Socks struct {
-	Ver        byte
-	Cmd        byte
-	AdrType    byte
-	RemoteAddr string
+	Ver     byte
+	Cmd     byte
+	AdrType byte
+	Adr     []byte
+	Port    []byte
+}
+
+func (s *Socks) String() string {
+	var dstStr string
+	var portStr string
+	switch s.AdrType {
+	case 0x01:
+		dstStr = (net.IP)(s.Adr).String()
+	case 0x03:
+		dstStr = string(s.Adr)
+	case 0x04:
+		dstStr = (net.IP)(s.Adr).String()
+	}
+	port := binary.BigEndian.Uint64(s.Port)
+	portStr = strconv.FormatUint(port, 10)
+	return dstStr + ":" + portStr
 }
 
 func GetRemote(conn net.Conn) (*Socks, error) {
@@ -26,7 +43,7 @@ func GetRemote(conn net.Conn) (*Socks, error) {
 	buf = buf[:n]
 	if buf[0] != 0x05 {
 		return nil, errors.New(
-			fmt.Sprintf("unsupported socks version: %d", buf[0]))
+			fmt.Sprintf("unsupported proto version: %d", buf[0]))
 	}
 	// nMethods := uint8(buf[1])
 	// methods := buf[2 : 2+nMethods]
@@ -60,32 +77,27 @@ func GetRemote(conn net.Conn) (*Socks, error) {
 	// parse address type
 	var dstAddr []byte
 	var dstLen uint8
-	var dstStr string
 	adrType := reqBuf[3]
 	switch adrType {
 	case 0x01:
 		dstLen = net.IPv4len
 		dstAddr = reqBuf[4 : 4+net.IPv4len]
-		dstStr = (net.IP)(dstAddr).String()
 	case 0x03:
 		dstLen = dstAddr[4] + 1
 		dstAddr = reqBuf[5 : 5+dstAddr[4]]
-		dstStr = string(dstAddr)
 	case 0x04:
 		dstLen = net.IPv6len
 		dstAddr = reqBuf[4 : 4+net.IPv6len]
-		dstStr = (net.IP)(dstAddr).String()
 	}
 
-	port := binary.BigEndian.Uint16(reqBuf[4+dstLen:])
-	portStr := strconv.FormatUint(uint64(port), 10)
-	remoteAddrStr := dstStr + ":" + portStr
+	port := reqBuf[4+dstLen:]
 
 	return &Socks{
-		Ver:        ver,
-		Cmd:        cmd,
-		AdrType:    adrType,
-		RemoteAddr: remoteAddrStr,
+		Ver:     ver,
+		Cmd:     cmd,
+		AdrType: adrType,
+		Adr:     dstAddr,
+		Port:    port,
 	}, nil
 }
 
@@ -97,7 +109,7 @@ func ResponseConn(conn net.Conn, status byte) error {
 	response[1] = status
 	_, err := conn.Write(response)
 	if err != nil {
-		return errors.New("response socks client error")
+		return errors.New("response proto client error")
 	}
 	return nil
 }
