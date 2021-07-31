@@ -22,7 +22,7 @@ type Local struct {
 func New(cipher encrypt.Cipher, port string, remote string) (*Local, error) {
 	laddr, err := net.ResolveTCPAddr("tcp", ":"+port)
 	if err != nil {
-		return nil, errors.New("resolve port error")
+		return nil, errors.New("resolve local port error")
 	}
 	listener, err := net.ListenTCP("tcp", laddr)
 	if err != nil {
@@ -46,7 +46,7 @@ func New(cipher encrypt.Cipher, port string, remote string) (*Local, error) {
 	return &Local{
 		cipher:   cipher,
 		listener: listener,
-		remote: remoteConn,
+		remote:   remoteConn,
 	}, nil
 }
 
@@ -66,7 +66,7 @@ func (l *Local) Serve() {
 	defer l.CloseListener()
 	defer l.CloseRemote()
 	for {
-		conn, err := l.AcceptTCP()	// conn from local client supporting socks5
+		conn, err := l.AcceptTCP() // conn from local client supporting socks5
 		if err != nil {
 			log.Printf("accept() error: %s", err)
 			continue
@@ -93,15 +93,23 @@ func (l *Local) handleConn(conn *net.TCPConn) {
 	}
 
 	_, err = l.cipher.EncryptCopy(l.remote, &buffer)
-	log.Println("dial", s)
+	log.Println("dial", s.String())
 	if err != nil {
-		socks.ResponseConn(conn, 0x02)
+		socks.ResponseConn(conn, 0x04)
 		log.Println("send encode data error")
 		return
 	}
-	err = socks.ResponseConn(conn, 0x00)
+
+	reply := make([]byte, 1)
+	l.remote.Read(reply)
+	err = socks.ResponseConn(conn, reply[0])
 	if err != nil {
 		log.Println(err)
+		return
+	}
+	if reply[0] != 0x00 {
+		log.Printf("bad connection, erron: %d\n", reply[0])
+		return
 	}
 
 	var wg sync.WaitGroup
