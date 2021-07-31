@@ -83,8 +83,8 @@ func GetRemote(conn net.Conn) (*Socks, error) {
 		dstLen = net.IPv4len
 		dstAddr = reqBuf[4 : 4+net.IPv4len]
 	case 0x03:
-		dstLen = dstAddr[4] + 1
-		dstAddr = reqBuf[5 : 5+dstAddr[4]]
+		dstLen = reqBuf[4]
+		dstAddr = reqBuf[5 : 5+reqBuf[4]]
 	case 0x04:
 		dstLen = net.IPv6len
 		dstAddr = reqBuf[4 : 4+net.IPv6len]
