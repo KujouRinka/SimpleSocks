@@ -27,8 +27,8 @@ func (s *Socks) String() string {
 	case 0x04:
 		dstStr = (net.IP)(s.Adr).String()
 	}
-	port := binary.BigEndian.Uint64(s.Port)
-	portStr = strconv.FormatUint(port, 10)
+	port := binary.BigEndian.Uint16(s.Port)
+	portStr = strconv.FormatUint(uint64(port), 10)
 	return dstStr + ":" + portStr
 }
 
