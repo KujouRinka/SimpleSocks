@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encrypt"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"proto/socks"
 	"sync"
+	"syscall"
 )
 
 type Server struct {
@@ -17,20 +19,24 @@ type Server struct {
 }
 
 func New(cipher encrypt.Cipher, port string) (*Server, error) {
-	laddr, err := net.ResolveTCPAddr("tcp", ":"+port)
-	if err != nil {
-		return nil, errors.New("resolve local port error")
+	config := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				// disable time-wait if possible
+				unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+			})
+		},
 	}
-	listener, err := net.ListenTCP("tcp", laddr)
+	rawListener, err := config.Listen(context.Background(), "tcp", ":"+port)
 	if err != nil {
 		return nil, errors.New(
 			fmt.Sprintf("listen port %s error", port))
 	}
-	f, _ := listener.File()
-
-	// disable time-wait if possible
-	unix.SetsockoptInt(int(f.Fd()), unix.SOL_SOCKET,
-		unix.SO_REUSEADDR, 1)
+	listener, ok := rawListener.(*net.TCPListener)
+	if !ok {
+		return nil,errors.New(
+			fmt.Sprintf("convert to tcp listener error"))
+	}
 
 	return &Server{
 		cipher:   cipher,
