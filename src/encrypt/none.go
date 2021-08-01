@@ -2,9 +2,7 @@ package encrypt
 
 import "io"
 
-type None struct {
-
-}
+type None struct{}
 
 func (n *None) Encrypt(data []byte) int {
 	return len(data)
