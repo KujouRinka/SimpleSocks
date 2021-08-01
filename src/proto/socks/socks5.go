@@ -115,7 +115,7 @@ func HandleGreeting(conn *net.TCPConn) error {
 
 func ReadReq(conn *net.TCPConn) ([]byte, error) {
 	// handling client connection request
-	reqBuf := make([]byte, 261)
+	reqBuf := make([]byte, 262)
 	n, err := conn.Read(reqBuf)
 	if err != nil {
 		return nil, errors.New("getting sock5 request error")

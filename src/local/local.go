@@ -103,6 +103,7 @@ func (l *Local) handleConn(conn *net.TCPConn) {
 		return
 	}
 	defer remote.Close()
+	remote.SetNoDelay(true)
 
 	remoteAddr := (socks.Req)(req).AdrPort()
 	l.cipher.Encrypt(req)

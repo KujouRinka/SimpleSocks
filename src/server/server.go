@@ -61,6 +61,8 @@ func (s *Server) Serve() {
 func (s *Server) handleConn(conn *net.TCPConn) {
 	defer conn.Close()
 
+	conn.SetNoDelay(true)
+
 	reqBuf := make([]byte, 261)
 	n, err := conn.Read(reqBuf)
 	if err != nil {
@@ -88,6 +90,7 @@ func (s *Server) handleConn(conn *net.TCPConn) {
 
 	// disable nagle algorithm for tcp conn
 	if t, ok := remote.(*net.TCPConn); ok {
+		// log.Println("disabled nagle")
 		t.SetNoDelay(true)
 	}
 
