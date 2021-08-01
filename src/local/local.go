@@ -142,9 +142,14 @@ func (l *Local) handleConn(conn *net.TCPConn) {
 	go func() {
 		l.cipher.DecryptCopy(conn, remote)
 		wg.Done()
+		conn.CloseWrite()
+		remote.CloseRead()
 	}()
 	go func() {
 		l.cipher.EncryptCopy(remote, conn)
+		wg.Done()
+		remote.CloseWrite()
+		conn.CloseRead()
 	}()
 	wg.Wait()
 }
