@@ -1,48 +1,85 @@
 package socks
 
 import (
-	"encoding/binary"
+	"bytes"
+	"encrypt"
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
+	"proto"
 )
 
-type Socks struct {
-	Ver     byte
-	Cmd     byte
-	AdrType byte
-	Adr     []byte
-	Port    []byte
+type Req []byte
+
+func (r Req) Ver() byte {
+	return r[0]
 }
 
-func (s *Socks) String() string {
-	var dstStr string
-	var portStr string
-	switch s.AdrType {
+func (r Req) Cmd() byte {
+	return r[1]
+}
+
+func (r Req) AdrType() byte {
+	return r[3]
+}
+
+func (r Req) DstAdr() []byte {
+	switch r.AdrType() {
 	case 0x01:
-		dstStr = (net.IP)(s.Adr).String()
+		return r[4 : 4+r.AdrLen()]
 	case 0x03:
-		dstStr = string(s.Adr)
+		return r[4 : 5+r.AdrLen()]
 	case 0x04:
-		dstStr = (net.IP)(s.Adr).String()
+		return r[4 : 4+r.AdrLen()]
+	default:
+		return nil
 	}
-	port := binary.BigEndian.Uint16(s.Port)
-	portStr = strconv.FormatUint(uint64(port), 10)
-	return dstStr + ":" + portStr
 }
 
-func GetRemote(conn net.Conn) (*Socks, error) {
+func (r Req) Port() []byte {
+	return r[len(r)-2:]
+}
 
-	// handling client greeting
+func (r Req) AdrLen() uint16 {
+	switch r.AdrType() {
+	case 0x01:
+		return net.IPv4len
+	case 0x03:
+		return uint16(r[4])
+	case 0x04:
+		return net.IPv6len
+	default:
+		return 0
+	}
+}
+
+func (r Req) Adr() []byte {
+	switch r.AdrType() {
+	case 0x01:
+		return r[4 : 4+r.AdrLen()]
+	case 0x03:
+		return r[5 : 5+r.AdrLen()]
+	case 0x04:
+		return r[4 : 4+r.AdrLen()]
+	default:
+		return nil
+	}
+}
+
+func (r Req) AdrPort() string {
+	return proto.NewAdrPort(
+		r.AdrType(), r.Adr(), r.Port()).String()
+}
+
+func HandleGreeting(conn *net.TCPConn) error {
 	buf := make([]byte, 257)
 	n, err := conn.Read(buf)
 	if err != nil {
-		return nil, errors.New("socks5 greeting error")
+		return errors.New("socks5 greeting error")
 	}
 	buf = buf[:n]
 	if buf[0] != 0x05 {
-		return nil, errors.New(
+		return errors.New(
 			fmt.Sprintf("unsupported proto version: %d", buf[0]))
 	}
 	// nMethods := uint8(buf[1])
@@ -51,65 +88,29 @@ func GetRemote(conn net.Conn) (*Socks, error) {
 
 	_, err = conn.Write([]byte{0x05, 0x00})
 	if err != nil {
-		return nil, errors.New("response greeting error")
+		return errors.New("response greeting error")
 	}
-	ver := byte(0x05)
+	return nil
+}
 
+func ReadReq(conn *net.TCPConn) ([]byte, error) {
 	// handling client connection request
 	reqBuf := make([]byte, 261)
-	n, err = conn.Read(reqBuf)
+	n, err := conn.Read(reqBuf)
 	if err != nil {
 		return nil, errors.New("getting sock5 request error")
 	}
-	reqBuf = reqBuf[:n]
-
-	// parse cmd
-	cmd := reqBuf[1]
-	switch cmd {
-	case 0x01:
-	case 0x02:
-	case 0x03:
-		// more thing need doing
-		// connMethod := "udp"
-	default:
-	}
-
-	// parse address type
-	var dstAddr []byte
-	var dstLen uint8
-	adrType := reqBuf[3]
-	switch adrType {
-	case 0x01:
-		dstLen = net.IPv4len
-		dstAddr = reqBuf[4 : 4+net.IPv4len]
-	case 0x03:
-		dstLen = reqBuf[4]
-		dstAddr = reqBuf[5 : 5+reqBuf[4]]
-	case 0x04:
-		dstLen = net.IPv6len
-		dstAddr = reqBuf[4 : 4+net.IPv6len]
-	}
-
-	port := reqBuf[4+dstLen:]
-
-	return &Socks{
-		Ver:     ver,
-		Cmd:     cmd,
-		AdrType: adrType,
-		Adr:     dstAddr,
-		Port:    port,
-	}, nil
+	return reqBuf[:n], nil
 }
 
-func ResponseConn(conn net.Conn, status byte) error {
-	response := []byte{
+func WriteResp(conn net.Conn, status byte, cipher encrypt.Cipher) error {
+	resp := []byte{
 		0x05, 0x00, 0x00, 0x01, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00,
 	}
-	response[1] = status
-	_, err := conn.Write(response)
-	if err != nil {
-		return errors.New("response proto client error")
-	}
+	resp[1] = status
+	buf := bytes.NewBuffer(resp)
+	cipher.EncryptCopy(conn, buf)
+
 	return nil
 }
