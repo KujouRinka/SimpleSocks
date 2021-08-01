@@ -1,11 +1,10 @@
 package server
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encrypt"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"log"
 	"net"
 	"proto/socks"
@@ -13,7 +12,7 @@ import (
 )
 
 type Server struct {
-	cipher encrypt.Cipher
+	cipher   encrypt.Cipher
 	listener *net.TCPListener
 }
 
@@ -27,9 +26,14 @@ func New(cipher encrypt.Cipher, port string) (*Server, error) {
 		return nil, errors.New(
 			fmt.Sprintf("listen port %s error", port))
 	}
+	f, _ := listener.File()
+
+	// disable time-wait if possible
+	unix.SetsockoptInt(int(f.Fd()), unix.SOL_SOCKET,
+		unix.SO_REUSEADDR, 1)
 
 	return &Server{
-		cipher: cipher,
+		cipher:   cipher,
 		listener: listener,
 	}, nil
 }
@@ -57,45 +61,53 @@ func (s *Server) Serve() {
 func (s *Server) handleConn(conn *net.TCPConn) {
 	defer conn.Close()
 
-	//receive raw request and decrypt into struct
-	var buffer bytes.Buffer
-	_, err := s.cipher.DecryptCopy(&buffer, conn)
+	reqBuf := make([]byte, 261)
+	n, err := conn.Read(reqBuf)
 	if err != nil {
-		log.Println("read raw data error")
+		log.Println("getting sock5 request error")
 		return
 	}
-	sockData := socks.Socks{}
-	binary.Read(&buffer, binary.BigEndian, &sockData)
-
-	// reply local
-	var cmd string
-	var reply []byte
-	switch sockData.Cmd {
-	case 0x01:
-		cmd = "tcp"
-		reply = []byte{0x00}
-	case 0x02:
-		reply = []byte{0x07}
-	case 0x03:
-		cmd = "udp"
-		reply = []byte{0x00}
-	}
-	s.cipher.Encrypt(reply)
-	conn.Write(reply)
+	reqBuf = reqBuf[:n]
+	s.cipher.Decrypt(reqBuf)
+	socksReq := socks.Req(reqBuf)
 
 	// dial dst addr
-	remote, err := net.Dial(cmd, sockData.String())
+	var cmd string
+	switch socksReq.Cmd() {
+	case 0x01:
+		cmd = "tcp"
+	case 0x02:
+	case 0x03:
+		cmd = "udp"
+	}
+	remote, err := net.Dial(cmd, socksReq.AdrPort())
+
+	// disable nagle algorithm for tcp conn
+	if t, ok := remote.(*net.TCPConn); ok {
+		t.SetNoDelay(true)
+	}
+
+	// write socks5 status
 	if err != nil {
-		log.Printf("dial %s error\n", remote.RemoteAddr())
+		log.Printf("dial %s error\n", socksReq.AdrPort())
+		socks.WriteResp(conn, 0x04, s.cipher)
 		return
 	}
 	defer remote.Close()
+	err = socks.WriteResp(conn, 0x00, s.cipher)
+	if err != nil {
+		log.Println("write sock5 status error")
+		return
+	}
 
 	if remote == nil {
 		log.Println("dial remote error, got nil")
 		return
 	}
+	log.Printf("connecting to %s(%s) successfully\n",
+		socksReq.AdrPort(), remote.RemoteAddr())
 
+	// handle connection
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {

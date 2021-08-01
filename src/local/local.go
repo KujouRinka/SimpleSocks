@@ -1,8 +1,6 @@
 package local
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encrypt"
 	"errors"
 	"fmt"
@@ -14,9 +12,9 @@ import (
 )
 
 type Local struct {
-	cipher   encrypt.Cipher
-	listener *net.TCPListener
-	remote   *net.TCPConn
+	cipher     encrypt.Cipher
+	listener   *net.TCPListener
+	serverAddr *net.TCPAddr
 }
 
 func New(cipher encrypt.Cipher, port string, remote string) (*Local, error) {
@@ -30,6 +28,8 @@ func New(cipher encrypt.Cipher, port string, remote string) (*Local, error) {
 			fmt.Sprintf("listen port %s error", port))
 	}
 	f, _ := listener.File()
+
+	// disable time-wait if possible
 	unix.SetsockoptInt(int(f.Fd()), unix.SOL_SOCKET,
 		unix.SO_REUSEADDR, 1)
 
@@ -37,16 +37,11 @@ func New(cipher encrypt.Cipher, port string, remote string) (*Local, error) {
 	if err != nil {
 		return nil, errors.New("resolve remote error")
 	}
-	remoteConn, err := net.DialTCP("tcp", nil, raddr)
-	if err != nil {
-		return nil, errors.New("dial remote server error")
-	}
-	remoteConn.SetNoDelay(true)
 
 	return &Local{
-		cipher:   cipher,
-		listener: listener,
-		remote:   remoteConn,
+		cipher:     cipher,
+		listener:   listener,
+		serverAddr: raddr,
 	}, nil
 }
 
@@ -54,17 +49,24 @@ func (l *Local) CloseListener() error {
 	return l.listener.Close()
 }
 
-func (l *Local) CloseRemote() error {
-	return l.remote.Close()
-}
-
 func (l *Local) AcceptTCP() (*net.TCPConn, error) {
 	return l.listener.AcceptTCP()
 }
 
+func (l *Local) DialServer() (*net.TCPConn, error) {
+
+	remoteConn, err := net.DialTCP("tcp", nil, l.serverAddr)
+	if err != nil {
+		return nil, errors.New("dial remote server error")
+	}
+
+	// disable nagle algorithm
+	remoteConn.SetNoDelay(true)
+	return remoteConn, nil
+}
+
 func (l *Local) Serve() {
 	defer l.CloseListener()
-	defer l.CloseRemote()
 	for {
 		conn, err := l.AcceptTCP() // conn from local client supporting socks5
 		if err != nil {
@@ -78,48 +80,62 @@ func (l *Local) Serve() {
 func (l *Local) handleConn(conn *net.TCPConn) {
 	defer conn.Close()
 
-	// parse socks5 traffic from client
-	s, err := socks.GetRemote(conn)
+	// greeting socks5
+	err := socks.HandleGreeting(conn)
 	if err != nil {
-		log.Println(err)
+		log.Println("handle greeting error:", err)
 		return
 	}
 
-	// encode parse result to binary
-	var buffer bytes.Buffer
-	if err = binary.Write(&buffer, binary.BigEndian, s); err != nil {
-		log.Println(err)
-		return
-	}
-
-	_, err = l.cipher.EncryptCopy(l.remote, &buffer)
-	log.Println("dial", s.String())
+	// handle request from client
+	req, err := socks.ReadReq(conn)
 	if err != nil {
-		socks.ResponseConn(conn, 0x04)
-		log.Println("send encode data error")
+		log.Println("read req error:", err)
 		return
 	}
-
-	reply := make([]byte, 1)
-	l.remote.Read(reply)
-	err = socks.ResponseConn(conn, reply[0])
+	remote, err := l.DialServer()
 	if err != nil {
-		log.Println(err)
+		log.Println("dial server error")
+		conn.Write([]byte{
+			0x05, 0x01, 0x00, 0x01, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x00,
+		})
 		return
 	}
-	if reply[0] != 0x00 {
-		log.Printf("bad connection, erron: %d\n", reply[0])
+	defer remote.Close()
+
+	remoteAddr := (socks.Req)(req).AdrPort()
+	l.cipher.Encrypt(req)
+	_, err = remote.Write(req)
+	if err != nil {
+		log.Println("write req error:", err)
 		return
 	}
 
+	resp := make([]byte, 10)
+	_, err = remote.Read(resp)
+	if err != nil {
+		log.Println("read response error:", err)
+		return
+	}
+	l.cipher.Decrypt(resp)
+	conn.Write(resp)
+
+	if resp[1] != 0x00 {
+		log.Println("socks5 connection error")
+		return
+	}
+	log.Printf("dial to %s successfully\n", remoteAddr)
+
+	// handle connection
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
-		l.cipher.DecryptCopy(conn, l.remote)
+		l.cipher.DecryptCopy(conn, remote)
 		wg.Done()
 	}()
 	go func() {
-		l.cipher.EncryptCopy(l.remote, conn)
+		l.cipher.EncryptCopy(remote, conn)
 	}()
 	wg.Wait()
 }
