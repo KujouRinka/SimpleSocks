@@ -73,6 +73,7 @@ func (l *Local) Serve() {
 			log.Printf("accept() error: %s", err)
 			continue
 		}
+		conn.SetLinger(0)
 		go l.handleConn(conn)
 	}
 }
@@ -104,6 +105,7 @@ func (l *Local) handleConn(conn *net.TCPConn) {
 	}
 	defer remote.Close()
 	remote.SetNoDelay(true)
+	remote.SetLinger(0)
 
 	remoteAddr := (socks.Req)(req).AdrPort()
 	l.cipher.Encrypt(req)

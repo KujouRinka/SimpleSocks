@@ -54,6 +54,7 @@ func (s *Server) Serve() {
 			log.Println(err)
 			continue
 		}
+		conn.SetLinger(0)
 		go s.handleConn(conn)
 	}
 }
@@ -63,7 +64,7 @@ func (s *Server) handleConn(conn *net.TCPConn) {
 
 	conn.SetNoDelay(true)
 
-	reqBuf := make([]byte, 261)
+	reqBuf := make([]byte, 262)
 	n, err := conn.Read(reqBuf)
 	if err != nil {
 		log.Println("getting sock5 request error")
@@ -92,6 +93,7 @@ func (s *Server) handleConn(conn *net.TCPConn) {
 	if t, ok := remote.(*net.TCPConn); ok {
 		// log.Println("disabled nagle")
 		t.SetNoDelay(true)
+		t.SetLinger(0)
 	}
 
 	// write socks5 status
@@ -100,17 +102,16 @@ func (s *Server) handleConn(conn *net.TCPConn) {
 		socks.WriteResp(conn, 0x04, s.cipher)
 		return
 	}
-	defer remote.Close()
 	err = socks.WriteResp(conn, 0x00, s.cipher)
 	if err != nil {
 		log.Println("write sock5 status error")
 		return
 	}
-
 	if remote == nil {
 		log.Println("dial remote error, got nil")
 		return
 	}
+	defer remote.Close()
 	log.Printf("connecting to %s(%s) successfully\n",
 		socksReq.AdrPort(), remote.RemoteAddr())
 
