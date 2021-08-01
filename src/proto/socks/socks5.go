@@ -11,6 +11,26 @@ import (
 
 type Req []byte
 
+func NewReq(b []byte) (Req, error) {
+	bSize := len(b)
+	if bSize < 5 {
+		return nil, errors.New("invalid socks5 pack")
+	}
+	var expectSz int
+	switch b[3] {
+	case 0x01:
+		expectSz = net.IPv4len + 6
+	case 0x03:
+		expectSz = int(b[4]) + 7
+	case 0x04:
+		expectSz = net.IPv6len + 6
+	}
+	if bSize != expectSz {
+		return nil, errors.New("invalid socks5 pack")
+	}
+	return b, nil
+}
+
 func (r Req) Ver() byte {
 	return r[0]
 }

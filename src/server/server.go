@@ -69,7 +69,11 @@ func (s *Server) handleConn(conn *net.TCPConn) {
 	}
 	reqBuf = reqBuf[:n]
 	s.cipher.Decrypt(reqBuf)
-	socksReq := socks.Req(reqBuf)
+	socksReq, err := socks.NewReq(reqBuf)
+	if err != nil {
+		log.Println("parse socks5 req pack error:", err)
+		return
+	}
 
 	// dial dst addr
 	var cmd string
